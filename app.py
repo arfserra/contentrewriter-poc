@@ -13,22 +13,30 @@ load_dotenv()
 # Load API key from environment variable
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
-# Function to scrape content from the webpage with SSL verification using certifi
+# Function to scrape the main body content, excluding header, footer, and navigation
 def scrape_content(url):
     try:
         # Use certifi to verify SSL certificates
         response = requests.get(url, verify=certifi.where())
         response.raise_for_status()  # Raise an error for bad responses (4XX, 5XX)
-        
+
         # Parse the HTML content using BeautifulSoup
         soup = BeautifulSoup(response.text, 'html.parser')
-        
-        # Extract text content from the page
-        content = soup.get_text(separator='\n')
 
-        # Clean up content: remove extra spaces and newlines
-        cleaned_content = clean_content(content)
-        return cleaned_content
+        # Try to extract content within the <main> tag or specific <div> sections
+        main_content = soup.find('main') or soup.find('div', {'class': 'content'})
+        
+        if main_content is None:
+            # If no <main> or <div> is found, fall back to other methods
+            main_content = soup.find('article') or soup.find('section')
+        
+        # Remove unwanted elements like <nav>, <aside>, <footer>, and ads
+        for element in main_content.find_all(['nav', 'footer', 'aside', 'header']):
+            element.decompose()  # Remove the unwanted elements
+
+        # Extract and clean the remaining text
+        content = ' '.join(main_content.get_text(separator=' ').split())
+        return content
 
     except requests.exceptions.RequestException as e:
         # Handle request errors
@@ -42,21 +50,27 @@ def clean_content(content):
     
 
 # Function to rewrite the content using OpenAI's ChatCompletion API via the client
-def rewrite_content(originalContent, audience, context):
+def rewrite_content(content, audience, context, channel):
     prompt = f"""
-    Rewrite the following content for a {audience} audience that's accessing this content on {context}:
+    You are an expert in {context} communication. Please rewrite the following content for a {audience} audience in a way that is optimized for {channel}. The content should be adapted to be clear, engaging, and suitable for this audience, providing information at the appropriate depth and complexity.
     
-    {originalContent}
+    Original Content:
+    {content}
+    
+    Consider the following:
+    - Audience: {audience} (e.g., healthcare professionals, patients, layperson)
+    - Context: {context} (e.g., patient education, a medical research paper, public awareness)
+    - Channel: {channel} (e.g., social media, a website article, a professional report)
+    
     """
     
-    # Use ChatCompletion with the OpenAI client to call GPT-3.5-turbo or GPT-4
     response = openai.chat.completions.create(
-        model="gpt-3.5-turbo",  # Or "gpt-4" if desired
+        model="gpt-4",
         messages=[
-            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "system", "content": "You are a helpful assistant skilled in content rewriting."},
             {"role": "user", "content": prompt},
         ],
-        max_tokens=1500,
+        max_tokens=1000,
         temperature=0.7
     )
     return response.choices[0].message.content
@@ -73,7 +87,10 @@ def main():
     audience = st.selectbox('Select the audience:', ('imaging technicians', 'procurement', 'journalist'))
 
     # Select context
-    context = st.selectbox('Select the context:', ('mobile', 'desktop', 'podcast'))
+    context = st.selectbox('Select the context:', ('large hospital group', 'small practice', 'trade publication', 'general publication'))
+
+        # Select channel
+    channel = st.selectbox('Select the channel:', ('mobile', 'desktop', 'podcast', 'conversational agent'))
 
     if st.button('Rewrite Content'):
         if url:
@@ -81,7 +98,7 @@ def main():
                 with st.spinner('Scraping content...'):
                     original_content = scrape_content(url)
                 with st.spinner('Rewriting content using LLM...'):
-                    rewritten_content = rewrite_content(original_content, audience, context)
+                    rewritten_content = rewrite_content(original_content, audience, context, channel)
                 st.subheader('Original Content:')
                 st.text_area('Original Content', original_content, height=200)
                 st.subheader('Rewritten Content:')
